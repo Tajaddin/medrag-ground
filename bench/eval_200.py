@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from medrag_ground import (
+    AnthropicClient,
     AuditLog,
     GroqClient,
     HashEmbedder,
@@ -233,7 +234,14 @@ def main() -> int:
     p.add_argument("--openfda", action="store_true", help="Try fetching real OpenFDA labels")
     p.add_argument("--label-limit", type=int, default=5)
     p.add_argument("--use-mock-llm", action="store_true", help="Use MockLLM (no API call)")
-    p.add_argument("--llm-model", type=str, default="llama-3.1-8b-instant")
+    p.add_argument(
+        "--backend",
+        choices=["auto", "anthropic", "groq", "mock"],
+        default="auto",
+        help="LLM backend. auto = Anthropic if ANTHROPIC_API_KEY is set, else Groq if GROQ_API_KEY is set, else mock.",
+    )
+    p.add_argument("--llm-model", type=str, default=None,
+                   help="Model id (default: claude-haiku-4-5-20251001 for anthropic, llama-3.1-8b-instant for groq)")
     p.add_argument("--out", type=str, default=str(DEFAULT_OUT))
     args = p.parse_args()
 
@@ -250,10 +258,21 @@ def main() -> int:
         + adversarial_questions(grounded_drugs)[:50]
     )
 
+    # Pick the backend: explicit --backend, else whichever key is present.
+    backend = args.backend
+    if args.use_mock_llm:
+        backend = "mock"
+    elif backend == "auto":
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            backend = "anthropic"
+        elif os.environ.get("GROQ_API_KEY"):
+            backend = "groq"
+        else:
+            backend = "mock"
+
     # Build a deterministic mock LLM that simulates a well-behaved (or
-    # adversary-respecting) responder when --use-mock-llm is passed. Real runs
-    # use Groq for honest behavior under prompt injection.
-    if args.use_mock_llm or not os.environ.get("GROQ_API_KEY"):
+    # adversary-respecting) responder when no real backend is available.
+    if backend == "mock":
         def mock_handler(prompt: str, system: str | None) -> str:
             # Extract the bracketed titles from the snippet block: anything
             # like "[Tylenol indications]" we treat as a candidate source.
@@ -269,8 +288,11 @@ def main() -> int:
 
         llm = MockLLMClient(handler=mock_handler)
         backend_label = "mock-llm"
+    elif backend == "anthropic":
+        llm = AnthropicClient(model=args.llm_model or "claude-haiku-4-5-20251001")
+        backend_label = llm.model
     else:
-        llm = GroqClient(model=args.llm_model)
+        llm = GroqClient(model=args.llm_model or "llama-3.1-8b-instant")
         backend_label = llm.model
 
     rag = MedRAG(idx, llm, audit_log=AuditLog(AUDIT_PATH), drug_lexicon=OUT_OF_CORPUS_DRUGS)
