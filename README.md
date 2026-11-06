@@ -122,18 +122,19 @@ assert resp.refused and "no grounded source" in resp.refusal_reason
 
 ## FastAPI server
 
-`examples/server.py` exposes `/ask`, `/audit`, and `/health`:
+`examples/server.py` exposes `/ask`, `/audit`, and `/health`. `/audit` needs a bearer token; without `MEDRAG_AUDIT_TOKEN` it is disabled.
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-uvicorn examples.server:app --port 8080
+export GROQ_API_KEY=gsk_...
+export MEDRAG_AUDIT_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+uvicorn examples.server:build_app --factory --port 8080
 ```
 
 ```bash
 curl -X POST localhost:8080/ask -H 'content-type: application/json' \
     -d '{"query": "What is the warning for Advil?"}'
 
-curl 'localhost:8080/audit?n=10'     # last 10 audit entries (PII-redacted)
+curl -H "Authorization: Bearer $MEDRAG_AUDIT_TOKEN" 'localhost:8080/audit?n=10'  # last 10 entries (PII-redacted), n in 1..100
 ```
 
 ## Tests
@@ -190,7 +191,7 @@ Covers PII detection across 7 categories, redaction, the full pipeline's refusal
 
 **No de-identification beyond redaction.** Redaction replaces matches with `[REDACTED:TYPE]` — that's reversible information loss but not k-anonymity. For HIPAA-grade workflows you'd need a Safe Harbor or Expert Determination pipeline downstream.
 
-**Single-tenant audit log.** The append-only JSONL has no auth or rotation. Real deployments would put audit entries in a separate database with retention policies.
+**Single-tenant audit log.** The append-only JSONL has no rotation, and the example server guards `/audit` with one shared token. Real deployments would put audit entries in a separate database with retention policies.
 
 **No re-ranking.** Top-k cosine is the only retrieval signal. Cross-encoder re-ranking would lift the grounded cite rate from 90% toward 95-100% on niche / multi-condition queries; out of scope for v0.1.
 

@@ -35,6 +35,7 @@ anthropic = ["anthropic>=0.39"]
 server = ["fastapi>=0.110", "uvicorn>=0.30"]
 dev = [
     "pytest>=8.0",
+    "fastapi>=0.110",
     "ruff>=0.6",
     "mypy>=1.10",
 ]
