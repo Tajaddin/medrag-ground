@@ -2,7 +2,7 @@
 
 > Audit-logged RAG over OpenFDA drug labels with **mandatory citation grounding** and **PII detection** on inputs. Healthcare-shaped regulated-workflow proxy: every answer cites a source, every refusal is logged, and the pipeline detects PII before any retrieval call.
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen)](#tests) [![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Tests](https://img.shields.io/badge/tests-32%20passing-brightgreen)](#tests) [![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
 
 ## Hero benchmark
 
@@ -145,10 +145,10 @@ pytest -q
 ```
 
 ```
-17 passed in 0.47s
+32 passed
 ```
 
-Covers PII detection across 7 categories, redaction, the full pipeline's refusal paths (PII, no retrieval, LLM refusal, missing citation, unsupported citation), grounded-answer happy path, audit log shape, and citation extraction.
+Covers PII detection across 7 categories, redaction, the full pipeline's refusal paths (PII, no retrieval, LLM refusal, missing citation, unsupported or partial citation, ungrounded drug name), grounded-answer happy path, audit log shape (no raw query on disk), citation extraction, and the server's `/audit` token and bounds (needs `fastapi`, in the dev extra).
 
 ## Configuration
 
@@ -173,7 +173,7 @@ Covers PII detection across 7 categories, redaction, the full pipeline's refusal
 │   ├── audit.py          # append-only JSONL audit log
 │   ├── llm.py            # Mock / Groq / Anthropic adapters
 │   └── pipeline.py       # MedRAG.ask() = PII → retrieve → cite-or-refuse → guard → audit
-├── tests/                # 17 pytest cases
+├── tests/                # 32 pytest cases
 ├── bench/
 │   ├── eval_200.py       # 200-question 4-category benchmark
 │   ├── eval_results.json # latest run output
