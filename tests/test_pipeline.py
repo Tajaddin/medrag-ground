@@ -187,3 +187,13 @@ def test_drug_names_present_in_retrieved_sources_pass() -> None:
     )
     _tylenol_only(rag)
     assert rag.ask("What is Tylenol used for?").refused is False
+
+
+@pytest.mark.parametrize("n", [0, -3])
+def test_audit_tail_of_non_positive_n_is_empty(n: int) -> None:
+    log = AuditLog()
+    rag = MedRAG(_build_index(), MockLLMClient(handler=lambda p, s: "unused"), audit_log=log)
+    for _ in range(5):
+        rag.ask("My SSN is 123-45-6789")
+    assert log.tail(n) == []
+    assert len(log.tail(2)) == 2

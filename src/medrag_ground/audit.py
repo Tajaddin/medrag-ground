@@ -49,4 +49,5 @@ class AuditLog:
         return time.time()
 
     def tail(self, n: int = 50) -> list[AuditEntry]:
-        return self.entries[-n:]
+        # entries[-0:] would be the whole log, and a negative n most of it.
+        return self.entries[-n:] if n > 0 else []
