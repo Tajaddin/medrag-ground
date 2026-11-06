@@ -115,3 +115,14 @@ def test_extract_citations_parses_brackets() -> None:
 
     out = _extract_citations("foo [Tylenol indications] bar [Advil warnings] baz [Tylenol indications]")
     assert out == ["Tylenol indications", "Advil warnings"]
+
+
+def test_audit_log_never_stores_the_raw_query(tmp_path) -> None:
+    path = tmp_path / "audit.jsonl"
+    rag = MedRAG(_build_index(), MockLLMClient(handler=lambda p, s: "unused"), audit_log=AuditLog(path))
+    rag.ask("My SSN is 123-45-6789 and email jo@example.com, what is Tylenol for?")
+    on_disk = path.read_text(encoding="utf-8")
+    assert "123-45-6789" not in on_disk
+    assert "jo@example.com" not in on_disk
+    assert "[REDACTED:SSN]" in on_disk
+    assert not hasattr(rag.audit_log.entries[0], "raw_query")

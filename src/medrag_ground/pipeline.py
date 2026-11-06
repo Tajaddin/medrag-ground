@@ -78,7 +78,7 @@ class MedRAG:
                 retrieved_doc_ids=[],
                 pii_types=sorted(set(pii_result.types)),
             )
-            self._audit(query, redacted, response)
+            self._audit(redacted, response)
             return response
 
         retrieved = self.retriever.search(query, k=self.top_k)
@@ -90,7 +90,7 @@ class MedRAG:
                 sources_cited=[],
                 retrieved_doc_ids=[],
             )
-            self._audit(query, query, response)
+            self._audit(query, response)
             return response
 
         retrieved_ids = [r.doc.doc_id for r in retrieved]
@@ -117,7 +117,7 @@ class MedRAG:
                 retrieved_doc_ids=retrieved_ids,
                 retrieval_scores=retrieval_scores,
             )
-            self._audit(query, query, response)
+            self._audit(query, response)
             return response
 
         cited = _extract_citations(answer_text)
@@ -133,7 +133,7 @@ class MedRAG:
                 retrieved_doc_ids=retrieved_ids,
                 retrieval_scores=retrieval_scores,
             )
-            self._audit(query, query, response)
+            self._audit(query, response)
             return response
         if unsupported:
             response = RAGResponse(
@@ -144,7 +144,7 @@ class MedRAG:
                 retrieved_doc_ids=retrieved_ids,
                 retrieval_scores=retrieval_scores,
             )
-            self._audit(query, query, response)
+            self._audit(query, response)
             return response
 
         response = RAGResponse(
@@ -155,14 +155,14 @@ class MedRAG:
             retrieved_doc_ids=retrieved_ids,
             retrieval_scores=retrieval_scores,
         )
-        self._audit(query, query, response)
+        self._audit(query, response)
         return response
 
     # ------------------------------------------------------------------
-    def _audit(self, raw_query: str, redacted_query: str, resp: RAGResponse) -> None:
+    def _audit(self, redacted_query: str, resp: RAGResponse) -> None:
+        """Log one outcome. Callers pass the PII-redacted query; the raw one is never stored."""
         entry = AuditEntry(
             timestamp=AuditLog.now(),
-            raw_query=raw_query,
             redacted_query=redacted_query,
             refused=resp.refused,
             refusal_reason=resp.refusal_reason,

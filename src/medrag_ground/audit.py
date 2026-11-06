@@ -1,4 +1,8 @@
-"""Append-only audit log. Every query the pipeline sees lands here."""
+"""Append-only audit log. Every query the pipeline sees lands here, PII-redacted.
+
+Raw queries are never stored: a query with PII is refused, and only its
+redacted form is logged.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,6 @@ from pathlib import Path
 @dataclass
 class AuditEntry:
     timestamp: float
-    raw_query: str
     redacted_query: str
     refused: bool
     refusal_reason: str | None
