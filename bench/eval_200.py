@@ -32,6 +32,7 @@ from medrag_ground import (
     GroqClient,
     HashEmbedder,
     Indexer,
+    LLMClient,
     MedRAG,
     MockLLMClient,
     OpenFDAClient,
@@ -272,6 +273,7 @@ def main() -> int:
 
     # Build a deterministic mock LLM that simulates a well-behaved (or
     # adversary-respecting) responder when no real backend is available.
+    llm: LLMClient
     if backend == "mock":
         def mock_handler(prompt: str, system: str | None) -> str:
             # Extract the bracketed titles from the snippet block: anything
