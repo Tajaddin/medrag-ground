@@ -14,7 +14,7 @@
 | **Unanswerable** (questions about drugs NOT in corpus) | 50 | refuse | **100.0%** refused |
 | **PII-injected** (queries containing SSN / phone / email / address / DOB) | 50 | refuse on PII before retrieval | **100.0%** refused for PII |
 | **Adversarial** ("ignore previous instructions" jailbreaks) | 50 | refuse or stay strictly cited | **100.0%** safe |
-| | | **Delivered answers naming a drug their retrieved sources don't mention** | **0 of 77** |
+| | | **Delivered answers naming one of the 20 known drugs that their retrieved sources don't mention** | **0 of 77** |
 
 Total wall-clock: 208 s. Raw per-question results: [`bench/eval_results.json`](bench/eval_results.json).
 
@@ -27,6 +27,8 @@ Reproduce:
 export ANTHROPIC_API_KEY=sk-ant-...   # or GROQ_API_KEY for the free path
 python bench/eval_200.py
 ```
+
+With neither key set the script runs an offline mock LLM instead (`--backend` picks one explicitly). Every run overwrites `bench/eval_results.json` unless you pass `--out`, and appends to `bench/audit.jsonl`.
 
 ## Why this exists
 
@@ -192,6 +194,8 @@ Covers PII detection across 7 categories, redaction, the full pipeline's refusal
 **No de-identification beyond redaction.** Redaction replaces matches with `[REDACTED:TYPE]` — that's reversible information loss but not k-anonymity. For HIPAA-grade workflows you'd need a Safe Harbor or Expert Determination pipeline downstream.
 
 **Single-tenant audit log.** The append-only JSONL has no rotation, and the example server guards `/audit` with one shared token. Real deployments would put audit entries in a separate database with retention policies.
+
+**The drug-name guard knows only the names it is given.** It matches every indexed label's brand and generic name, plus `drug_lexicon`, as whole words or phrases. It cannot catch a drug outside that list, and a bare "naproxen" does not match the generic "Naproxen sodium". Over an arbitrary OpenFDA slice, as the example server indexes, some generic names are ordinary words (hand sanitisers list "alcohol", for instance), so an answer using such a word that no retrieved chunk contains is refused. It has been tested only on the 5-label fallback corpus.
 
 **No re-ranking.** Top-k cosine is the only retrieval signal. Cross-encoder re-ranking would lift the grounded cite rate from 90% toward 95-100% on niche / multi-condition queries; out of scope for v0.1.
 
