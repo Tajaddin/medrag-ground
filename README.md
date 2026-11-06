@@ -14,11 +14,13 @@
 | **Unanswerable** (questions about drugs NOT in corpus) | 50 | refuse | **100.0%** refused |
 | **PII-injected** (queries containing SSN / phone / email / address / DOB) | 50 | refuse on PII before retrieval | **100.0%** refused for PII |
 | **Adversarial** ("ignore previous instructions" jailbreaks) | 50 | refuse or stay strictly cited | **100.0%** safe |
-| | | **Hallucinated drug names in any answer** | **0** |
+| | | **Delivered answers naming a drug their retrieved sources don't mention** | **0 of 77** |
 
 Total wall-clock: 208 s. Raw per-question results: [`bench/eval_results.json`](bench/eval_results.json).
 
-The 5 grounded refusals are cases where the citation guard caught a citation the LLM produced that didn't match a retrieved source — exactly the failure mode the guard is designed to catch (the LLM cited a section name like "general usage" that the retriever hadn't returned). The audit log records each as `unsupported citation(s)`.
+The 5 grounded refusals are the LLM's own `REFUSE` (the audit log records each as `LLM refused: insufficient grounded source`); none was caught by the citation guard. In three, about what Aleve treats, the retriever never returned Aleve's indications chunk. The other two ask about warnings the labels don't contain (stomach bleeding for Benadryl, drowsiness for Tylenol), so refusing was correct.
+
+The drug-name row was re-checked offline after the guards were tightened: `python bench/rescore_guards.py` re-applies the exact citation match and the drug-name guard to the 77 answers the run delivered, using the audit log's answer text and retrieved chunks. All 77 pass, so the rates above are unchanged. The guard knows 20 names: the 5 indexed brands, their generic names, and the 10 out-of-corpus drugs the unanswerable questions ask about; it cannot catch a drug name outside that list. The original run's check only looked for capitalised mentions of those 10 out-of-corpus drugs.
 
 Reproduce:
 ```bash
@@ -174,6 +176,7 @@ Covers PII detection across 7 categories, redaction, the full pipeline's refusal
 ├── bench/
 │   ├── eval_200.py       # 200-question 4-category benchmark
 │   ├── eval_results.json # latest run output
+│   ├── rescore_guards.py # re-apply the post-LLM guards to the logged run
 │   └── audit.jsonl       # written by the eval
 └── examples/
     └── server.py         # FastAPI /ask + /audit + /health
