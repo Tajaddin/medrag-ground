@@ -40,7 +40,7 @@ class AskResponse(BaseModel):
     sources_cited: list[str]
 
 
-def create_app(rag: MedRAG, audit_log: AuditLog, *, audit_token: str | None) -> FastAPI:
+def create_app(rag: MedRAG, *, audit_token: str | None) -> FastAPI:
     """``/audit`` requires ``Authorization: Bearer <audit_token>``; with no token it is disabled."""
     app = FastAPI(title="medrag-ground")
 
@@ -60,11 +60,18 @@ def create_app(rag: MedRAG, audit_log: AuditLog, *, audit_token: str | None) -> 
         authorization: str | None = Header(None),
     ) -> dict:
         """Return the last N audit entries (most recent first)."""
-        if not audit_token or not hmac.compare_digest(
-            (authorization or "").encode(), f"Bearer {audit_token}".encode()
+        scheme, _, token = (authorization or "").partition(" ")
+        if (
+            not audit_token
+            or scheme.lower() != "bearer"
+            or not hmac.compare_digest(token.strip().encode(), audit_token.encode())
         ):
-            raise HTTPException(status_code=401, detail="audit token required")
-        entries = audit_log.tail(n)
+            raise HTTPException(
+                status_code=401,
+                detail="audit token required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        entries = rag.audit_log.tail(n)
         return {
             "n": len(entries),
             "entries": [
@@ -103,6 +110,5 @@ def build_app() -> FastAPI:
 
         indexer.index_labels(FALLBACK_LABELS)
 
-    audit_log = AuditLog(Path("audit.jsonl"))
-    rag = MedRAG(indexer, GroqClient(), audit_log=audit_log)
-    return create_app(rag, audit_log, audit_token=os.environ.get("MEDRAG_AUDIT_TOKEN"))
+    rag = MedRAG(indexer, GroqClient(), audit_log=AuditLog(Path("audit.jsonl")))
+    return create_app(rag, audit_token=os.environ.get("MEDRAG_AUDIT_TOKEN"))

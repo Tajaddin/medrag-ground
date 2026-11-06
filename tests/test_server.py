@@ -25,7 +25,7 @@ def _client(audit_token: str | None) -> TestClient:
     rag = MedRAG(idx, MockLLMClient(handler=lambda p, s: "unused"), audit_log=log)
     for i in range(30):
         rag.ask(f"My phone is 415-555-{1000 + i}")
-    return TestClient(create_app(rag, log, audit_token=audit_token))
+    return TestClient(create_app(rag, audit_token=audit_token))
 
 
 def test_audit_requires_the_configured_token() -> None:
@@ -35,6 +35,17 @@ def test_audit_requires_the_configured_token() -> None:
     ok = client.get("/audit?n=5", headers={"Authorization": f"Bearer {TOKEN}"})
     assert ok.status_code == 200
     assert ok.json()["n"] == 5
+
+
+def test_audit_token_scheme_is_case_insensitive() -> None:
+    client = _client(TOKEN)
+    assert client.get("/audit", headers={"Authorization": f"bearer {TOKEN}"}).status_code == 200
+
+
+def test_audit_401_names_the_bearer_scheme() -> None:
+    r = _client(TOKEN).get("/audit")
+    assert r.status_code == 401
+    assert r.headers["www-authenticate"] == "Bearer"
 
 
 def test_audit_is_disabled_when_no_token_is_configured() -> None:
