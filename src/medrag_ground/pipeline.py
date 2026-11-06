@@ -121,9 +121,8 @@ class MedRAG:
             return response
 
         cited = _extract_citations(answer_text)
-        valid_sources = {f"{r.doc.drug_name} {r.doc.section}".lower() for r in retrieved}
-        # Drug-name hallucination guard: any cited title must overlap a retrieved source.
-        unsupported = [c for c in cited if c.lower() not in valid_sources and not any(c.lower() in v for v in valid_sources)]
+        valid_sources = {_normalize_title(f"{r.doc.drug_name} {r.doc.section}") for r in retrieved}
+        unsupported = [c for c in cited if _normalize_title(c) not in valid_sources]
         if not cited:
             response = RAGResponse(
                 answer=answer_text,
@@ -175,6 +174,10 @@ class MedRAG:
 
 
 _CITATION_RE = re.compile(r"\[([^\[\]]{2,80})\]")
+
+
+def _normalize_title(title: str) -> str:
+    return " ".join(title.lower().split())
 
 
 def _extract_citations(text: str) -> list[str]:

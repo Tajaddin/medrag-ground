@@ -126,3 +126,24 @@ def test_audit_log_never_stores_the_raw_query(tmp_path) -> None:
     assert "jo@example.com" not in on_disk
     assert "[REDACTED:SSN]" in on_disk
     assert not hasattr(rag.audit_log.entries[0], "raw_query")
+
+
+@pytest.mark.parametrize("citation", ["Tylenol", "indications", "nol ind"])
+def test_partial_source_title_is_not_a_valid_citation(citation: str) -> None:
+    rag = MedRAG(
+        _build_index(),
+        MockLLMClient(handler=lambda p, s: f"Acetaminophen relieves minor aches [{citation}]."),
+        min_score=0.0,
+    )
+    resp = rag.ask("What is Tylenol used for?")
+    assert resp.refused is True
+    assert "unsupported" in (resp.refusal_reason or "")
+
+
+def test_citation_match_ignores_case_and_spacing() -> None:
+    rag = MedRAG(
+        _build_index(),
+        MockLLMClient(handler=lambda p, s: "Acetaminophen relieves minor aches [tylenol  Indications]."),
+        min_score=0.0,
+    )
+    assert rag.ask("What is Tylenol used for?").refused is False
