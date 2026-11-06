@@ -1,7 +1,8 @@
-"""Append-only audit log. Every query the pipeline sees lands here, PII-redacted.
+"""Append-only audit log. Every query the pipeline sees lands here.
 
-Raw queries are never stored: a query with PII is refused, and only its
-redacted form is logged.
+Only the PII detector's redacted form of a query is stored, and a query with
+detected PII is refused. A query in which the detector finds nothing is stored
+as typed, so PII the regexes miss does reach the log.
 """
 
 from __future__ import annotations

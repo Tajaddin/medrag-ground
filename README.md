@@ -32,7 +32,7 @@ python bench/eval_200.py
 
 The CV claims healthcare data work, but the production system at AzeriMed is private. Recruiters scanning GitHub for healthcare evidence see nothing. `medrag-ground` is a public proxy that has the same shape as a regulated healthcare workflow:
 
-* **Audit-logged** — every query (PII-redacted), every retrieval, every refusal lands in an append-only JSONL
+* **Audit-logged** — every query (detected PII redacted), every retrieval, every refusal lands in an append-only JSONL
 * **Citation-grounded** — the pipeline rejects any answer without a bracketed source title from the retrieved chunks, and any answer that names a known drug none of those chunks mention
 * **PII-aware** — regex-based detection on user inputs catches email, phone, SSN, credit card, DOB, name+honorific, address; queries with PII are refused before retrieval
 * **Adversarial-tolerant** — the strict system prompt anchors the model on cited sources; jailbreaks like "ignore previous instructions" don't escape the citation guard
@@ -134,7 +134,7 @@ uvicorn examples.server:build_app --factory --port 8080
 curl -X POST localhost:8080/ask -H 'content-type: application/json' \
     -d '{"query": "What is the warning for Advil?"}'
 
-curl -H "Authorization: Bearer $MEDRAG_AUDIT_TOKEN" 'localhost:8080/audit?n=10'  # last 10 entries (PII-redacted), n in 1..100
+curl -H "Authorization: Bearer $MEDRAG_AUDIT_TOKEN" 'localhost:8080/audit?n=10'  # last 10 entries (detected PII redacted), n in 1..100
 ```
 
 ## Tests
@@ -148,7 +148,7 @@ pytest -q
 32 passed
 ```
 
-Covers PII detection across 7 categories, redaction, the full pipeline's refusal paths (PII, no retrieval, LLM refusal, missing citation, unsupported or partial citation, ungrounded drug name), grounded-answer happy path, audit log shape (no raw query on disk), citation extraction, and the server's `/audit` token and bounds (needs `fastapi`, in the dev extra).
+Covers PII detection across 7 categories, redaction, the full pipeline's refusal paths (PII, no retrieval, LLM refusal, missing citation, unsupported or partial citation, ungrounded drug name), grounded-answer happy path, audit log shape (detected PII never on disk), citation extraction, and the server's `/audit` token and bounds (needs `fastapi`, in the dev extra).
 
 ## Configuration
 
@@ -187,7 +187,7 @@ Covers PII detection across 7 categories, redaction, the full pipeline's refusal
 
 **OpenFDA labels are SPL excerpts, not clinical guidance.** This project is for software-engineering demonstration purposes only. Do not use the output as medical advice. The strict citation guard reduces hallucination risk but does not establish clinical fitness.
 
-**PII detection is regex-based.** Production deployments handling PHI should use Microsoft Presidio, AWS Comprehend Medical, or similar — they handle context (e.g. "patient John" vs "John Wayne movie") and rare formats much better than a 7-pattern regex. The regex approach here is conservative (it refuses on false positives), which is the right failure mode for a healthcare workflow even if it's not the right fit for free-form chat.
+**PII detection is regex-based.** Production deployments handling PHI should use Microsoft Presidio, AWS Comprehend Medical, or similar — they handle context (e.g. "patient John" vs "John Wayne movie") and rare formats much better than a 7-pattern regex. The regex approach here is conservative (it refuses on false positives), which is the right failure mode for a healthcare workflow even if it's not the right fit for free-form chat. What it misses is not refused, and lands in the audit log as typed.
 
 **No de-identification beyond redaction.** Redaction replaces matches with `[REDACTED:TYPE]` — that's reversible information loss but not k-anonymity. For HIPAA-grade workflows you'd need a Safe Harbor or Expert Determination pipeline downstream.
 

@@ -170,7 +170,7 @@ class MedRAG:
 
     # ------------------------------------------------------------------
     def _audit(self, redacted_query: str, resp: RAGResponse) -> None:
-        """Log one outcome. Callers pass the PII-redacted query; the raw one is never stored."""
+        """Log one outcome. Callers pass the PII detector's redacted form of the query."""
         entry = AuditEntry(
             timestamp=AuditLog.now(),
             redacted_query=redacted_query,
