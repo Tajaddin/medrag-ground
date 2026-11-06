@@ -31,7 +31,7 @@ python bench/eval_200.py
 The CV claims healthcare data work, but the production system at AzeriMed is private. Recruiters scanning GitHub for healthcare evidence see nothing. `medrag-ground` is a public proxy that has the same shape as a regulated healthcare workflow:
 
 * **Audit-logged** — every query (PII-redacted), every retrieval, every refusal lands in an append-only JSONL
-* **Citation-grounded** — the pipeline rejects any answer without a bracketed source title from the retrieved chunks
+* **Citation-grounded** — the pipeline rejects any answer without a bracketed source title from the retrieved chunks, and any answer that names a known drug none of those chunks mention
 * **PII-aware** — regex-based detection on user inputs catches email, phone, SSN, credit card, DOB, name+honorific, address; queries with PII are refused before retrieval
 * **Adversarial-tolerant** — the strict system prompt anchors the model on cited sources; jailbreaks like "ignore previous instructions" don't escape the citation guard
 
@@ -55,8 +55,13 @@ OpenFDA is a public API, MIT-licensed code, no AWS, no API keys required for the
                                │
                        ┌───────▼────────┐
                        │ Citation guard │ — every bracketed title must
-                       │                │   match a retrieved source
+                       │                │   equal a retrieved source title
                        └───────┬────────┘   refuse if unsupported
+                               │ ok
+                       ┌───────▼────────┐
+                       │ Drug-name guard│ — every known drug named must
+                       │                │   appear in a retrieved source
+                       └───────┬────────┘   refuse if ungrounded
                                │ ok
                        ┌───────▼────────┐
                        │ AuditLog       │ — append redacted query +
@@ -110,7 +115,8 @@ assert resp.refused and "no grounded source" in resp.refusal_reason
 | `no grounded source above threshold` | No retrieved chunk has cosine similarity ≥ `min_score` | retrieved doc IDs (empty) |
 | `LLM refused: insufficient grounded source` | The LLM itself output `REFUSE: ...` | which sources it had access to |
 | `answer had no citations` | LLM produced an answer but no `[source]` brackets | the offending answer text |
-| `unsupported citation(s)` | LLM cited a source that wasn't in the retrieved chunks | the unsupported citation strings |
+| `unsupported citation(s)` | LLM cited a source that wasn't in the retrieved chunks (titles must match exactly, ignoring case and spacing) | the unsupported citation strings |
+| `ungrounded drug name(s)` | Answer names a known drug — any indexed brand or generic name, plus `drug_lexicon` — that no retrieved chunk mentions | the drug names |
 
 ## FastAPI server
 
@@ -147,6 +153,7 @@ Covers PII detection across 7 categories, redaction, the full pipeline's refusal
 |---|---|---|
 | `min_score` (Retriever) | minimum cosine similarity for a chunk to enter context | 0.30 |
 | `top_k` (MedRAG) | max chunks per query | 5 |
+| `drug_lexicon` (MedRAG) | extra drug names the drug-name guard recognises, e.g. drugs known to be absent from the corpus; it can only catch names it knows | none |
 | `Embedder` | swap for any `Embedder` instance | FastEmbed BGE-small if installed, else HashEmbedder |
 | `LLMClient` | swap to GroqClient (free), AnthropicClient, or any custom | required |
 

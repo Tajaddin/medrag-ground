@@ -147,3 +147,43 @@ def test_citation_match_ignores_case_and_spacing() -> None:
         min_score=0.0,
     )
     assert rag.ask("What is Tylenol used for?").refused is False
+
+
+def _tylenol_only(rag: MedRAG) -> None:
+    from medrag_ground.indexer import Retrieval
+
+    docs = [d for d in rag.indexer.docs if d.drug_name == "Tylenol"]
+    rag.retriever.search = lambda query, k=5: [Retrieval(doc=d, score=1.0) for d in docs]
+
+
+def test_answer_naming_an_unretrieved_indexed_drug_is_refused() -> None:
+    rag = MedRAG(
+        _build_index(),
+        MockLLMClient(handler=lambda p, s: "Acetaminophen or ibuprofen relieve pain [Tylenol indications]."),
+    )
+    _tylenol_only(rag)
+    resp = rag.ask("What is Tylenol used for?")
+    assert resp.refused is True
+    assert resp.refusal_reason == "ungrounded drug name(s): ['Ibuprofen']"
+
+
+def test_answer_naming_a_lexicon_drug_outside_the_corpus_is_refused() -> None:
+    rag = MedRAG(
+        _build_index(),
+        MockLLMClient(handler=lambda p, s: "Take Tylenol, or lipitor [Tylenol indications]."),
+        drug_lexicon=["Lipitor"],
+    )
+    _tylenol_only(rag)
+    resp = rag.ask("What is Tylenol used for?")
+    assert resp.refused is True
+    assert "Lipitor" in (resp.refusal_reason or "")
+
+
+def test_drug_names_present_in_retrieved_sources_pass() -> None:
+    rag = MedRAG(
+        _build_index(),
+        MockLLMClient(handler=lambda p, s: "Acetaminophen (Tylenol) relieves aches [Tylenol indications]."),
+        drug_lexicon=["Lipitor"],
+    )
+    _tylenol_only(rag)
+    assert rag.ask("What is Tylenol used for?").refused is False
