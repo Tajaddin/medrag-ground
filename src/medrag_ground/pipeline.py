@@ -6,8 +6,10 @@ Flow::
         1. PII check       — refuse if PII detected
         2. Retrieve top-k  — refuse if no chunk above min_score
         3. LLM with strict cite-or-refuse prompt over retrieved chunks
-        4. Drug-name guard — refuse if answer names drugs not in retrieved sources
-        5. Audit log every step
+        4. Citation guard  — refuse unless every citation is a retrieved source title
+        5. Drug-name guard — refuse if the answer names a known drug (any indexed
+                             drug, plus ``drug_lexicon``) that no retrieved source mentions
+        6. Audit log every step
 
 Refusals are first-class outcomes. ``RAGResponse.refused == True`` with a
 ``refusal_reason`` is the desired behavior on bad inputs.
@@ -16,10 +18,11 @@ Refusals are first-class outcomes. ``RAGResponse.refused == True`` with a
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from medrag_ground.audit import AuditEntry, AuditLog
-from medrag_ground.indexer import Indexer, Retriever
+from medrag_ground.indexer import DrugDoc, Indexer, Retrieval, Retriever
 from medrag_ground.llm import LLMClient
 from medrag_ground.pii import PIIDetector
 
@@ -57,13 +60,17 @@ class MedRAG:
         audit_log: AuditLog | None = None,
         top_k: int = 5,
         min_score: float = 0.30,
+        drug_lexicon: Iterable[str] = (),
     ) -> None:
+        """``drug_lexicon`` adds drug names the guard should recognise beyond the
+        indexed ones, e.g. drugs known to be absent from the corpus."""
         self.indexer = indexer
         self.retriever = Retriever(indexer, min_score=min_score)
         self.llm = llm
         self.pii = pii_detector or PIIDetector()
         self.audit_log = audit_log or AuditLog()
         self.top_k = top_k
+        self.drug_lexicon = list(drug_lexicon)
 
     # ------------------------------------------------------------------
     def ask(self, query: str) -> RAGResponse:
@@ -78,7 +85,7 @@ class MedRAG:
                 retrieved_doc_ids=[],
                 pii_types=sorted(set(pii_result.types)),
             )
-            self._audit(query, redacted, response)
+            self._audit(redacted, response)
             return response
 
         retrieved = self.retriever.search(query, k=self.top_k)
@@ -90,7 +97,7 @@ class MedRAG:
                 sources_cited=[],
                 retrieved_doc_ids=[],
             )
-            self._audit(query, query, response)
+            self._audit(query, response)
             return response
 
         retrieved_ids = [r.doc.doc_id for r in retrieved]
@@ -117,52 +124,55 @@ class MedRAG:
                 retrieved_doc_ids=retrieved_ids,
                 retrieval_scores=retrieval_scores,
             )
-            self._audit(query, query, response)
+            self._audit(query, response)
             return response
 
-        cited = _extract_citations(answer_text)
-        valid_sources = {f"{r.doc.drug_name} {r.doc.section}".lower() for r in retrieved}
-        # Drug-name hallucination guard: any cited title must overlap a retrieved source.
-        unsupported = [c for c in cited if c.lower() not in valid_sources and not any(c.lower() in v for v in valid_sources)]
-        if not cited:
-            response = RAGResponse(
-                answer=answer_text,
-                refused=True,
-                refusal_reason="answer had no citations",
-                sources_cited=[],
-                retrieved_doc_ids=retrieved_ids,
-                retrieval_scores=retrieval_scores,
-            )
-            self._audit(query, query, response)
-            return response
-        if unsupported:
-            response = RAGResponse(
-                answer=answer_text,
-                refused=True,
-                refusal_reason=f"unsupported citation(s): {unsupported}",
-                sources_cited=cited,
-                retrieved_doc_ids=retrieved_ids,
-                retrieval_scores=retrieval_scores,
-            )
-            self._audit(query, query, response)
-            return response
-
+        refusal_reason, cited = self.check_answer(answer_text, retrieved)
         response = RAGResponse(
             answer=answer_text,
-            refused=False,
-            refusal_reason=None,
+            refused=refusal_reason is not None,
+            refusal_reason=refusal_reason,
             sources_cited=cited,
             retrieved_doc_ids=retrieved_ids,
             retrieval_scores=retrieval_scores,
         )
-        self._audit(query, query, response)
+        self._audit(query, response)
         return response
 
+    def check_answer(
+        self, answer_text: str, retrieved: list[Retrieval]
+    ) -> tuple[str | None, list[str]]:
+        """Run the post-LLM guards. Returns ``(refusal_reason, citations)``;
+        ``refusal_reason`` is None when the answer may be shown."""
+        cited = _extract_citations(answer_text)
+        if not cited:
+            return "answer had no citations", cited
+        valid_sources = {_normalize_title(f"{r.doc.drug_name} {r.doc.section}") for r in retrieved}
+        unsupported = [c for c in cited if _normalize_title(c) not in valid_sources]
+        if unsupported:
+            return f"unsupported citation(s): {unsupported}", cited
+        ungrounded = self._ungrounded_drug_names(answer_text, [r.doc for r in retrieved])
+        if ungrounded:
+            return f"ungrounded drug name(s): {ungrounded}", cited
+        return None, cited
+
+    def _ungrounded_drug_names(self, answer_text: str, sources: list[DrugDoc]) -> list[str]:
+        """Known drug names the answer mentions but no retrieved source does."""
+        known: dict[str, str] = {}
+        for name in [*self.drug_lexicon, *(n for d in self.indexer.docs for n in _names(d))]:
+            known.setdefault(name.lower(), name)
+        source_text = " ".join(" ".join([*_names(d), d.text]) for d in sources)
+        return sorted(
+            name
+            for name in known.values()
+            if _mentions(answer_text, name) and not _mentions(source_text, name)
+        )
+
     # ------------------------------------------------------------------
-    def _audit(self, raw_query: str, redacted_query: str, resp: RAGResponse) -> None:
+    def _audit(self, redacted_query: str, resp: RAGResponse) -> None:
+        """Log one outcome. Callers pass the PII detector's redacted form of the query."""
         entry = AuditEntry(
             timestamp=AuditLog.now(),
-            raw_query=raw_query,
             redacted_query=redacted_query,
             refused=resp.refused,
             refusal_reason=resp.refusal_reason,
@@ -175,6 +185,22 @@ class MedRAG:
 
 
 _CITATION_RE = re.compile(r"\[([^\[\]]{2,80})\]")
+
+
+def _normalize_title(title: str) -> str:
+    return " ".join(title.lower().split())
+
+
+def _names(doc: DrugDoc) -> list[str]:
+    return [
+        n
+        for n in (doc.drug_name, doc.metadata.get("brand_name"), doc.metadata.get("generic_name"))
+        if n
+    ]
+
+
+def _mentions(text: str, name: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text, re.IGNORECASE) is not None
 
 
 def _extract_citations(text: str) -> list[str]:

@@ -2,7 +2,7 @@
 
 > Audit-logged RAG over OpenFDA drug labels with **mandatory citation grounding** and **PII detection** on inputs. Healthcare-shaped regulated-workflow proxy: every answer cites a source, every refusal is logged, and the pipeline detects PII before any retrieval call.
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen)](#tests) [![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Tests](https://img.shields.io/badge/tests-34%20passing-brightgreen)](#tests) [![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
 
 ## Hero benchmark
 
@@ -14,11 +14,13 @@
 | **Unanswerable** (questions about drugs NOT in corpus) | 50 | refuse | **100.0%** refused |
 | **PII-injected** (queries containing SSN / phone / email / address / DOB) | 50 | refuse on PII before retrieval | **100.0%** refused for PII |
 | **Adversarial** ("ignore previous instructions" jailbreaks) | 50 | refuse or stay strictly cited | **100.0%** safe |
-| | | **Hallucinated drug names in any answer** | **0** |
+| | | **Delivered answers naming one of the 20 known drugs that their retrieved sources don't mention** | **0 of 77** |
 
 Total wall-clock: 208 s. Raw per-question results: [`bench/eval_results.json`](bench/eval_results.json).
 
-The 5 grounded refusals are cases where the citation guard caught a citation the LLM produced that didn't match a retrieved source — exactly the failure mode the guard is designed to catch (the LLM cited a section name like "general usage" that the retriever hadn't returned). The audit log records each as `unsupported citation(s)`.
+The 5 grounded refusals are the LLM's own `REFUSE` (the audit log records each as `LLM refused: insufficient grounded source`); none was caught by the citation guard. In three, about what Aleve treats, the retriever never returned Aleve's indications chunk. The other two ask about warnings the labels don't contain (stomach bleeding for Benadryl, drowsiness for Tylenol), so refusing was correct.
+
+The drug-name row was re-checked offline after the guards were tightened: `python bench/rescore_guards.py` re-applies the exact citation match and the drug-name guard to the 77 answers the run delivered, using the audit log's answer text and retrieved chunks. All 77 pass, so the rates above are unchanged. The guard knows 20 names: the 5 indexed brands, their generic names, and the 10 out-of-corpus drugs the unanswerable questions ask about; it cannot catch a drug name outside that list. The original run's check only looked for capitalised mentions of those 10 out-of-corpus drugs.
 
 Reproduce:
 ```bash
@@ -26,12 +28,14 @@ export ANTHROPIC_API_KEY=sk-ant-...   # or GROQ_API_KEY for the free path
 python bench/eval_200.py
 ```
 
+With neither key set the script runs an offline mock LLM instead (`--backend` picks one explicitly). Every run overwrites `bench/eval_results.json` unless you pass `--out`, and appends to `bench/audit.jsonl`.
+
 ## Why this exists
 
 The CV claims healthcare data work, but the production system at AzeriMed is private. Recruiters scanning GitHub for healthcare evidence see nothing. `medrag-ground` is a public proxy that has the same shape as a regulated healthcare workflow:
 
-* **Audit-logged** — every query (PII-redacted), every retrieval, every refusal lands in an append-only JSONL
-* **Citation-grounded** — the pipeline rejects any answer without a bracketed source title from the retrieved chunks
+* **Audit-logged** — every query (detected PII redacted), every retrieval, every refusal lands in an append-only JSONL
+* **Citation-grounded** — the pipeline rejects any answer without a bracketed source title from the retrieved chunks, and any answer that names a known drug none of those chunks mention
 * **PII-aware** — regex-based detection on user inputs catches email, phone, SSN, credit card, DOB, name+honorific, address; queries with PII are refused before retrieval
 * **Adversarial-tolerant** — the strict system prompt anchors the model on cited sources; jailbreaks like "ignore previous instructions" don't escape the citation guard
 
@@ -55,8 +59,13 @@ OpenFDA is a public API, MIT-licensed code, no AWS, no API keys required for the
                                │
                        ┌───────▼────────┐
                        │ Citation guard │ — every bracketed title must
-                       │                │   match a retrieved source
+                       │                │   equal a retrieved source title
                        └───────┬────────┘   refuse if unsupported
+                               │ ok
+                       ┌───────▼────────┐
+                       │ Drug-name guard│ — every known drug named must
+                       │                │   appear in a retrieved source
+                       └───────┬────────┘   refuse if ungrounded
                                │ ok
                        ┌───────▼────────┐
                        │ AuditLog       │ — append redacted query +
@@ -110,22 +119,24 @@ assert resp.refused and "no grounded source" in resp.refusal_reason
 | `no grounded source above threshold` | No retrieved chunk has cosine similarity ≥ `min_score` | retrieved doc IDs (empty) |
 | `LLM refused: insufficient grounded source` | The LLM itself output `REFUSE: ...` | which sources it had access to |
 | `answer had no citations` | LLM produced an answer but no `[source]` brackets | the offending answer text |
-| `unsupported citation(s)` | LLM cited a source that wasn't in the retrieved chunks | the unsupported citation strings |
+| `unsupported citation(s)` | LLM cited a source that wasn't in the retrieved chunks (titles must match exactly, ignoring case and spacing) | the unsupported citation strings |
+| `ungrounded drug name(s)` | Answer names a known drug — any indexed brand or generic name, plus `drug_lexicon` — that no retrieved chunk mentions | the drug names |
 
 ## FastAPI server
 
-`examples/server.py` exposes `/ask`, `/audit`, and `/health`:
+`examples/server.py` exposes `/ask`, `/audit`, and `/health`. `/audit` needs a bearer token; without `MEDRAG_AUDIT_TOKEN` it is disabled.
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-uvicorn examples.server:app --port 8080
+export GROQ_API_KEY=gsk_...
+export MEDRAG_AUDIT_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+uvicorn examples.server:build_app --factory --port 8080
 ```
 
 ```bash
 curl -X POST localhost:8080/ask -H 'content-type: application/json' \
     -d '{"query": "What is the warning for Advil?"}'
 
-curl 'localhost:8080/audit?n=10'     # last 10 audit entries (PII-redacted)
+curl -H "Authorization: Bearer $MEDRAG_AUDIT_TOKEN" 'localhost:8080/audit?n=10'  # last 10 entries (detected PII redacted), n in 1..100
 ```
 
 ## Tests
@@ -136,10 +147,10 @@ pytest -q
 ```
 
 ```
-17 passed in 0.47s
+34 passed
 ```
 
-Covers PII detection across 7 categories, redaction, the full pipeline's refusal paths (PII, no retrieval, LLM refusal, missing citation, unsupported citation), grounded-answer happy path, audit log shape, and citation extraction.
+Covers PII detection across 7 categories, redaction, the full pipeline's refusal paths (PII, no retrieval, LLM refusal, missing citation, unsupported or partial citation, ungrounded drug name), grounded-answer happy path, audit log shape (detected PII never on disk), citation extraction, and the server's `/audit` token (scheme in any case, `WWW-Authenticate` on 401) and bounds (needs `fastapi`, in the dev extra).
 
 ## Configuration
 
@@ -147,6 +158,7 @@ Covers PII detection across 7 categories, redaction, the full pipeline's refusal
 |---|---|---|
 | `min_score` (Retriever) | minimum cosine similarity for a chunk to enter context | 0.30 |
 | `top_k` (MedRAG) | max chunks per query | 5 |
+| `drug_lexicon` (MedRAG) | extra drug names the drug-name guard recognises, e.g. drugs known to be absent from the corpus; it can only catch names it knows | none |
 | `Embedder` | swap for any `Embedder` instance | FastEmbed BGE-small if installed, else HashEmbedder |
 | `LLMClient` | swap to GroqClient (free), AnthropicClient, or any custom | required |
 
@@ -163,10 +175,11 @@ Covers PII detection across 7 categories, redaction, the full pipeline's refusal
 │   ├── audit.py          # append-only JSONL audit log
 │   ├── llm.py            # Mock / Groq / Anthropic adapters
 │   └── pipeline.py       # MedRAG.ask() = PII → retrieve → cite-or-refuse → guard → audit
-├── tests/                # 17 pytest cases
+├── tests/                # 34 pytest cases
 ├── bench/
 │   ├── eval_200.py       # 200-question 4-category benchmark
 │   ├── eval_results.json # latest run output
+│   ├── rescore_guards.py # re-apply the post-LLM guards to the logged run
 │   └── audit.jsonl       # written by the eval
 └── examples/
     └── server.py         # FastAPI /ask + /audit + /health
@@ -176,11 +189,13 @@ Covers PII detection across 7 categories, redaction, the full pipeline's refusal
 
 **OpenFDA labels are SPL excerpts, not clinical guidance.** This project is for software-engineering demonstration purposes only. Do not use the output as medical advice. The strict citation guard reduces hallucination risk but does not establish clinical fitness.
 
-**PII detection is regex-based.** Production deployments handling PHI should use Microsoft Presidio, AWS Comprehend Medical, or similar — they handle context (e.g. "patient John" vs "John Wayne movie") and rare formats much better than a 7-pattern regex. The regex approach here is conservative (it refuses on false positives), which is the right failure mode for a healthcare workflow even if it's not the right fit for free-form chat.
+**PII detection is regex-based.** Production deployments handling PHI should use Microsoft Presidio, AWS Comprehend Medical, or similar — they handle context (e.g. "patient John" vs "John Wayne movie") and rare formats much better than a 7-pattern regex. The regex approach here is conservative (it refuses on false positives), which is the right failure mode for a healthcare workflow even if it's not the right fit for free-form chat. What it misses is not refused, and lands in the audit log as typed.
 
 **No de-identification beyond redaction.** Redaction replaces matches with `[REDACTED:TYPE]` — that's reversible information loss but not k-anonymity. For HIPAA-grade workflows you'd need a Safe Harbor or Expert Determination pipeline downstream.
 
-**Single-tenant audit log.** The append-only JSONL has no auth or rotation. Real deployments would put audit entries in a separate database with retention policies.
+**Single-tenant audit log.** The append-only JSONL has no rotation, and the example server guards `/audit` with one shared token. Real deployments would put audit entries in a separate database with retention policies.
+
+**The drug-name guard knows only the names it is given.** It matches every indexed label's brand and generic name, plus `drug_lexicon`, as whole words or phrases. It cannot catch a drug outside that list, and a bare "naproxen" does not match the generic "Naproxen sodium". Over an arbitrary OpenFDA slice, as the example server indexes, some generic names are ordinary words (hand sanitisers list "alcohol", for instance), so an answer using such a word that no retrieved chunk contains is refused. It has been tested only on the 5-label fallback corpus.
 
 **No re-ranking.** Top-k cosine is the only retrieval signal. Cross-encoder re-ranking would lift the grounded cite rate from 90% toward 95-100% on niche / multi-condition queries; out of scope for v0.1.
 
